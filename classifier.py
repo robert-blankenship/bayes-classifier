@@ -98,8 +98,6 @@ def main():
     print("Accuracy: {}".format((true_negative + true_positive) / (1.0 * len(training_samples))))
 
 
-
-
 class Model:
     def __init__(self, positive_probabilities, negative_probabilities, percent_negative, percent_positive):
         self.positive_probabilities = positive_probabilities
