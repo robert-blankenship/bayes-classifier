@@ -1,5 +1,8 @@
-from typing import List, Set
+#!/usr/bin/env python3
+import heapq
 import numpy as np
+import sys
+from typing import List, Set
 
 
 class Sample:
@@ -14,6 +17,7 @@ class Sample:
 
         self.review_text = chunks[-1].replace("\n", '')
         self.review_tokens = get_tokens(self.review_text)
+        self.review_vector = None
 
     def to_string(self):
         # return "text={},tokens={},rating={}".format(self.review_text, self.review_tokens, self.rating)
@@ -21,11 +25,19 @@ class Sample:
 
     # TODO: Performance
     def word_vec(self, vocab_list: List[str]) -> List[int]:
+        if self.review_vector is not None:
+            return self.review_vector
+
         vec = [0 for _ in vocab_list]
         tokens = set(self.review_tokens)
         for i, vocab in enumerate(vocab_list):
             if vocab in tokens:
                 vec[i] = 1
+
+        # Cache the word vector.
+        if self.review_vector is None:
+            self.review_vector = vec
+
         return vec
 
     def __str__(self):
@@ -35,7 +47,7 @@ class Sample:
         return self.to_string()
 
 
-def get_tokens(input_text: str) -> list:
+def get_tokens(input_text: str) -> List[str]:
     cleaned_text = input_text
     cleaned_text = cleaned_text.replace(".", "")
     cleaned_text = cleaned_text.replace("!", "")
@@ -47,12 +59,14 @@ def get_tokens(input_text: str) -> list:
     return [token for token in tokens if not (token.startswith("@") or token.startswith("http") or token == "")]
 
 
-def load_samples(filename: str):
+def load_samples(filename: str, encoding='ISO-8859-1', max_size=sys.maxsize) -> List[Sample]:
     samples = []
-    with open(filename, "r") as training:
+    with open(filename, "r", encoding=encoding) as training:
         for line in training:
             samples.append(Sample(line))
-    return samples
+    np.random.seed(42)  # So that each test is repeatable.
+    np.random.shuffle(samples)
+    return samples[0:int(max_size)]
 
 
 def create_vocab_list(samples: list):
@@ -63,20 +77,61 @@ def create_vocab_list(samples: list):
     return list(vocab_set)
 
 
+def create_vocab_list_max_size(samples: list, max_vocab_size=float('inf')):
+    vocab_heap = []
+
+    vocab_counts = {}
+    for sample in samples:
+        for token in sample.review_tokens:
+            if token not in vocab_counts:
+                vocab_counts[token] = 1
+            else:
+                vocab_counts[token] += 1
+
+    words_removed = 0
+
+    for item, count in vocab_counts.items():
+        heapq.heappush(vocab_heap, (count, item))
+
+        while len(vocab_heap) > max_vocab_size:
+            heapq.heappop(vocab_heap)
+            words_removed += 1
+
+    print("Removed {} word(s) from the vocabulary".format(words_removed))
+
+    return [word for count, word in vocab_heap]
+
+
 def main():
-    training_samples = load_samples("training.csv")
-    vocab_list = create_vocab_list(training_samples)
+    print("Loading samples")
+    training_samples = load_samples("data/training.1600000.processed.noemoticon.csv", max_size=sys.maxsize)
+
+    print("Creating vocab list")
+    vocab_list = create_vocab_list_max_size(training_samples, max_vocab_size=2000)
+    print("Created vocab list: length={}".format(len(vocab_list)))
+
+    print("Training model")
     model = train(training_samples, vocab_list)
 
+    print("Testing accuracy")
+    test(training_samples=training_samples, model=model, vocab_list=vocab_list)
+
+
+def test(training_samples, model, vocab_list, test_percentage=.1):
     false_positive = 0
     false_negative = 0
     true_positive = 0
     true_negative = 0
 
+    test_samples_count = int(len(training_samples) * test_percentage)
+    test_samples = training_samples[0:test_samples_count]
+
     results = []
 
-    for sample in training_samples:
+    for i, sample in enumerate(test_samples):
         results.append((model.classify(sample.word_vec(vocab_list)), sample.is_positive))
+        if i % 10000 == 0:
+            print("Tested {}/{} samples".format(i, len(test_samples)))
 
     for actual, expected in results:
         if actual == expected:
@@ -95,7 +150,7 @@ def main():
     print("true_positive={}".format(true_positive))
     print("true_negative={}".format(true_negative))
 
-    print("Accuracy: {}".format((true_negative + true_positive) / (1.0 * len(training_samples))))
+    print("Accuracy: {}".format((true_negative + true_positive) / (1.0 * len(test_samples))))
 
 
 class Model:
@@ -119,7 +174,7 @@ class Model:
             return False
 
 
-def train(samples, vocab_list):
+def train(samples, vocab_list, training_reporting_period=100000):
     num_negative = len([sample for sample in samples if sample.rating == 0])
     num_positive = len(samples) - num_negative
 
@@ -134,13 +189,16 @@ def train(samples, vocab_list):
     negative_word_counts = np.ones(len(vocab_list))
     negative_probabilities_denom = 2.
 
-    for sample in samples:
+    for i, sample in enumerate(samples):
         if sample.is_negative:
             negative_word_counts += sample.word_vec(vocab_list)
             negative_probabilities_denom += len(sample.review_tokens)
         else:
             positive_word_counts += sample.word_vec(vocab_list)
             positive_probabilities_denom += len(sample.review_tokens)
+
+        if i % training_reporting_period == 0:
+            print("Trained {}/{} samples".format(i, len(samples)))
 
     # TODO: Why the log?
     positive_probabilities = np.log(positive_word_counts / positive_probabilities_denom)
