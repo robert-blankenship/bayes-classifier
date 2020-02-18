@@ -5,6 +5,15 @@ import sys
 from typing import List, Set
 
 
+class Vocab:
+    def __init__(self, vocab_list: List[str]):
+        self.list = vocab_list
+        self.length = len(vocab_list)
+        self.indices = {}
+        for i, el in enumerate(vocab_list):
+            self.indices[el] = i
+
+
 class Sample:
     def __init__(self, raw_sample: str):
         chunks = raw_sample.split('","')
@@ -24,15 +33,15 @@ class Sample:
         return str(self.review_tokens)
 
     # TODO: Performance
-    def word_vec(self, vocab_list: List[str]) -> List[int]:
+    def word_vec(self, vocab: Vocab) -> np.array:
         if self.review_vector is not None:
             return self.review_vector
 
-        vec = [0 for _ in vocab_list]
-        tokens = set(self.review_tokens)
-        for i, vocab in enumerate(vocab_list):
-            if vocab in tokens:
-                vec[i] = 1
+        vec = np.zeros(len(vocab.list))
+
+        for token in self.review_tokens:
+            if token in vocab.indices:
+                vec[vocab.indices[token]] = 1
 
         # Cache the word vector.
         if self.review_vector is None:
@@ -99,25 +108,25 @@ def create_vocab_list_max_size(samples: list, max_vocab_size=float('inf')):
 
     print("Removed {} word(s) from the vocabulary".format(words_removed))
 
-    return [word for count, word in vocab_heap]
+    return Vocab([word for count, word in vocab_heap])
 
 
 def main():
     print("Loading samples")
-    training_samples = load_samples("data/training.1600000.processed.noemoticon.csv", max_size=sys.maxsize)
+    training_samples = load_samples("data/training.1600000.processed.noemoticon.csv", max_size=100000)
 
     print("Creating vocab list")
-    vocab_list = create_vocab_list_max_size(training_samples, max_vocab_size=2000)
-    print("Created vocab list: length={}".format(len(vocab_list)))
+    vocab = create_vocab_list_max_size(training_samples, max_vocab_size=20000)
+    print("Created vocab list: length={}".format(vocab.length))
 
     print("Training model")
-    model = train(training_samples, vocab_list)
+    model = train(training_samples, vocab)
 
     print("Testing accuracy")
-    test(training_samples=training_samples, model=model, vocab_list=vocab_list)
+    test(training_samples=training_samples, model=model, vocab=vocab)
 
 
-def test(training_samples, model, vocab_list, test_percentage=.1):
+def test(training_samples, model, vocab: Vocab, test_percentage=.1):
     false_positive = 0
     false_negative = 0
     true_positive = 0
@@ -129,7 +138,7 @@ def test(training_samples, model, vocab_list, test_percentage=.1):
     results = []
 
     for i, sample in enumerate(test_samples):
-        results.append((model.classify(sample.word_vec(vocab_list)), sample.is_positive))
+        results.append((model.classify(sample.word_vec(vocab)), sample.is_positive))
         if i % 10000 == 0:
             print("Tested {}/{} samples".format(i, len(test_samples)))
 
@@ -154,16 +163,17 @@ def test(training_samples, model, vocab_list, test_percentage=.1):
 
 
 class Model:
-    def __init__(self, positive_probabilities, negative_probabilities, percent_negative, percent_positive):
-        self.positive_probabilities = positive_probabilities
-        self.negative_probabilities = negative_probabilities
-        self.percent_negative = percent_negative
-        self.percent_positive = percent_positive
+    def __init__(self, positive_probabilities: np.array, negative_probabilities: np.array,
+                 percent_negative: float, percent_positive: float):
+        self.positive_probabilities: np.array = positive_probabilities
+        self.negative_probabilities: np.array = negative_probabilities
+        self.percent_negative: float = percent_negative
+        self.percent_positive: float = percent_positive
 
     # Return "True" for positive sentiment, "False" for negative sentiment.
-    def classify(self, word_vector):
-        prob_positive = sum(word_vector * self.positive_probabilities)
-        prob_negative = sum(word_vector * self.negative_probabilities)
+    def classify(self, word_vector: np.array):
+        prob_positive = np.sum(word_vector * self.positive_probabilities)
+        prob_negative = np.sum(word_vector * self.negative_probabilities)
 
         prob_positive += np.log(self.percent_positive)
         prob_negative += np.log(self.percent_negative)
@@ -174,7 +184,7 @@ class Model:
             return False
 
 
-def train(samples, vocab_list, training_reporting_period=100000):
+def train(samples, vocab: Vocab, training_reporting_period=100000):
     num_negative = len([sample for sample in samples if sample.rating == 0])
     num_positive = len(samples) - num_negative
 
@@ -182,19 +192,19 @@ def train(samples, vocab_list, training_reporting_period=100000):
     percent_positive = num_positive / float(len(samples))
 
     # positive_word_counts = np.zeros(len(vocab_list))
-    positive_word_counts = np.ones(len(vocab_list))
+    positive_word_counts = np.ones(vocab.length)
     positive_probabilities_denom = 2.
 
     # negative_word_counts = np.zeros(len(vocab_list))
-    negative_word_counts = np.ones(len(vocab_list))
+    negative_word_counts = np.ones(vocab.length)
     negative_probabilities_denom = 2.
 
     for i, sample in enumerate(samples):
         if sample.is_negative:
-            negative_word_counts += sample.word_vec(vocab_list)
+            negative_word_counts += sample.word_vec(vocab)
             negative_probabilities_denom += len(sample.review_tokens)
         else:
-            positive_word_counts += sample.word_vec(vocab_list)
+            positive_word_counts += sample.word_vec(vocab)
             positive_probabilities_denom += len(sample.review_tokens)
 
         if i % training_reporting_period == 0:
