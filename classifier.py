@@ -26,7 +26,6 @@ class Sample:
 
         self.review_text = chunks[-1].replace("\n", '')
         self.review_tokens = get_tokens(self.review_text)
-        self.review_vector = None
 
     def to_string(self):
         # return "text={},tokens={},rating={}".format(self.review_text, self.review_tokens, self.rating)
@@ -34,18 +33,11 @@ class Sample:
 
     # TODO: Performance
     def word_vec(self, vocab: Vocab) -> np.array:
-        if self.review_vector is not None:
-            return self.review_vector
-
         vec = np.zeros(len(vocab.list))
 
         for token in self.review_tokens:
             if token in vocab.indices:
                 vec[vocab.indices[token]] = 1
-
-        # Cache the word vector.
-        if self.review_vector is None:
-            self.review_vector = vec
 
         return vec
 
@@ -123,10 +115,10 @@ def create_vocab_max_size(samples: list, max_vocab_size=float('inf')):
 
 def main():
     print("Loading samples")
-    training_samples, testing_samples = load_samples("data/training.1600000.processed.noemoticon.csv", max_size=800000)
+    training_samples, testing_samples = load_samples("data/training.1600000.processed.noemoticon.csv", max_size=sys.maxsize)
 
     print("Creating vocab")
-    vocab = create_vocab_max_size(training_samples, max_vocab_size=50000)
+    vocab = create_vocab_max_size(training_samples, max_vocab_size=5000)
     print("Created vocab: length={}".format(vocab.length))
 
     print("Training model")
