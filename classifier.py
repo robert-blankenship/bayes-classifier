@@ -68,14 +68,24 @@ def get_tokens(input_text: str) -> List[str]:
     return [token for token in tokens if not (token.startswith("@") or token.startswith("http") or token == "")]
 
 
-def load_samples(filename: str, encoding='ISO-8859-1', max_size=sys.maxsize) -> List[Sample]:
+def load_samples(filename: str, encoding='ISO-8859-1', max_size=sys.maxsize,
+                 test_percentage: float = .1) -> (List[Sample], List[Sample]):
     samples = []
     with open(filename, "r", encoding=encoding) as training:
         for line in training:
             samples.append(Sample(line))
-    np.random.seed(42)  # So that each test is repeatable.
+
+    # Shuffle the samples.
+    np.random.seed(42)
     np.random.shuffle(samples)
-    return samples[0:int(max_size)]
+
+    # Use only a maximum number of samples.
+    samples = samples[0:int(max_size)]
+
+    training_samples = samples[0:int(len(samples) * (1 - test_percentage))]
+    testing_samples = samples[-int(len(samples) * test_percentage):]
+
+    return training_samples, testing_samples
 
 
 def create_vocab_list(samples: list):
@@ -86,7 +96,7 @@ def create_vocab_list(samples: list):
     return list(vocab_set)
 
 
-def create_vocab_list_max_size(samples: list, max_vocab_size=float('inf')):
+def create_vocab_max_size(samples: list, max_vocab_size=float('inf')):
     vocab_heap = []
 
     vocab_counts = {}
@@ -113,33 +123,32 @@ def create_vocab_list_max_size(samples: list, max_vocab_size=float('inf')):
 
 def main():
     print("Loading samples")
-    training_samples = load_samples("data/training.1600000.processed.noemoticon.csv", max_size=100000)
+    training_samples, testing_samples = load_samples("data/training.1600000.processed.noemoticon.csv", max_size=800000)
 
-    print("Creating vocab list")
-    vocab = create_vocab_list_max_size(training_samples, max_vocab_size=20000)
-    print("Created vocab list: length={}".format(vocab.length))
+    print("Creating vocab")
+    vocab = create_vocab_max_size(training_samples, max_vocab_size=50000)
+    print("Created vocab: length={}".format(vocab.length))
 
     print("Training model")
     model = train(training_samples, vocab)
 
     print("Testing accuracy")
-    test(training_samples=training_samples, model=model, vocab=vocab)
+    test(test_samples=testing_samples, model=model, vocab=vocab)
 
 
-def test(training_samples, model, vocab: Vocab, test_percentage=.1):
+def test(test_samples, model, vocab: Vocab, reporting_periods=10):
+    reporting_interval = len(test_samples) / reporting_periods
+
     false_positive = 0
     false_negative = 0
     true_positive = 0
     true_negative = 0
 
-    test_samples_count = int(len(training_samples) * test_percentage)
-    test_samples = training_samples[0:test_samples_count]
-
     results = []
 
     for i, sample in enumerate(test_samples):
         results.append((model.classify(sample.word_vec(vocab)), sample.is_positive))
-        if i % 10000 == 0:
+        if i % reporting_interval == 0:
             print("Tested {}/{} samples".format(i, len(test_samples)))
 
     for actual, expected in results:
@@ -184,7 +193,10 @@ class Model:
             return False
 
 
-def train(samples, vocab: Vocab, training_reporting_period=100000):
+def train(samples, vocab: Vocab, reporting_periods=10):
+    # Log each time this number of samples have been trained.
+    training_reporting_period = len(samples) / reporting_periods
+
     num_negative = len([sample for sample in samples if sample.rating == 0])
     num_positive = len(samples) - num_negative
 
